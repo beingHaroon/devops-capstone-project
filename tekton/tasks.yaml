@@ -1,125 +1,49 @@
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: echo
+spec:
+  description: This task will echo the message.
+  params:
+    - name: message
+      description: The message to echo
+      type: string
+  steps:
+    - name: echo-message
+      image: alpine:3
+      command: ["/bin/echo"]
+      args: ["$(params.message)"]
+
+---
 apiVersion: tekton.dev/v1beta1
 kind: Task
 metadata:
   name: cleanup
 spec:
+  description: This task will clean up a workspace by deleting all of the files.
   workspaces:
     - name: source
   steps:
     - name: remove
-      image: registry.access.redhat.com/ubi9/ubi:9.3
+      image: alpine:3
       workingDir: $(workspaces.source.path)
       securityContext:
-        allowPrivilegeEscalation: false
-        runAsNonRoot: true
-        seccompProfile:
-          type: RuntimeDefault
-        runAsUser: 1001680000
-        capabilities:
-          drop: ["ALL"]
+        runAsNonRoot: false
+        runAsUser: 0
+      env:
+        - name: WORKSPACE_SOURCE_PATH
+          value: $(workspaces.source.path)
       script: |
         #!/usr/bin/env sh
         set -eu
-        echo "Removing all files from $(workspaces.source.path) ..."
-        if [ -d "$(workspaces.source.path)" ] ; then
-          rm -rf "$(workspaces.source.path)"/.[!.]* || true
-          rm -rf "$(workspaces.source.path)"/..?* || true
-          rm -rf "$(workspaces.source.path)"/* || true
+        echo "Removing all files from ${WORKSPACE_SOURCE_PATH} ..."
+
+        if [ -d "${WORKSPACE_SOURCE_PATH}" ]; then
+          rm -rf "${WORKSPACE_SOURCE_PATH:?}"/*
+          rm -rf "${WORKSPACE_SOURCE_PATH}"/.[!.]*
+          rm -rf "${WORKSPACE_SOURCE_PATH}"/..?*
         fi
-
----
-apiVersion: tekton.dev/v1beta1
-kind: Task
-metadata:
-  name: git-clone
-spec:
-  description: "Custom git clone task that works under OpenShift restricted SCC"
-  workspaces:
-    - name: output
-      description: The workspace where the repo will be cloned
-  params:
-    - name: url
-      type: string
-      description: "Git repository URL"
-    - name: revision
-      type: string
-      default: "main"
-      description: "Git branch, tag, or commit"
-  steps:
-    - name: clone
-      # UBI image which allows installing git at runtime
-      image: alpine/git:latest
-      workingDir: $(workspaces.output.path)
-      securityContext:
-        allowPrivilegeEscalation: false
-        runAsNonRoot: true
-        runAsUser: 1001680000
-        seccompProfile:
-          type: RuntimeDefault
-        capabilities:
-          drop: ["ALL"]
-      script: |
-        #!/bin/sh
-        set -eux
-
-        # install git if not present
-        microdnf -y update || true
-        microdnf -y install git || true
-
-        echo "Cloning URL: $(params.url)"
-        echo "Checking out revision: $(params.revision)"
-
-        # Clean directory
-        rm -rf ./* || true
-        rm -rf ./.??* || true
-
-        # Clone the repository into the workspace
-        git clone "$(params.url)" repo
-
-        # Move into repo
-        cd repo
-
-        # Checkout branch/commit
-        git checkout "$(params.revision)" || true
-
-        echo "Clone complete"
-
----
-apiVersion: tekton.dev/v1beta1
-kind: Task
-metadata:
-  name: flake8
-spec:
-  description: "Lint Python code with flake8"
-  workspaces:
-    - name: source
-  params:
-    - name: image
-      type: string
-      default: "registry.access.redhat.com/ubi9/python-39"
-    - name: args
-      type: string
-      default: "--count --max-complexity=10 --max-line-length=127 --statistics"
-  steps:
-    - name: run-flake8
-      image: $(params.image)
-      workingDir: $(workspaces.source.path)
-      securityContext:
-        allowPrivilegeEscalation: false
-        runAsNonRoot: true
-        runAsUser: 1001680000
-        seccompProfile:
-          type: RuntimeDefault
-        capabilities:
-          drop: ["ALL"]
-      script: |
-        #!/bin/sh
-        set -eux
-        pip install --upgrade pip || true
-        pip install flake8
-        echo "Running flake8 with args: $(params.args)"
-        flake8 $(params.args) || true
-
 
 ---
 apiVersion: tekton.dev/v1beta1
@@ -142,27 +66,17 @@ spec:
   steps:
     - name: nosetests
       image: python:3.9-slim
-      workingDir: $(workspaces.source.path)/repo
-      securityContext:
-        allowPrivilegeEscalation: false
-        runAsNonRoot: true
-        seccompProfile:
-          type: RuntimeDefault
-        runAsUser: 1001680000
-        capabilities:
-          drop: ["ALL"]
+      workingDir: $(workspaces.source.path)
       env:
         - name: DATABASE_URI
           value: $(params.database_uri)
       script: |
         #!/bin/bash
         set -e
-        echo "***** Installing dependencies *****"
-        export PIP_CACHE_DIR=$(workspaces.source.path)/.cache
-        export PYTHONUSERBASE=$(workspaces.source.path)/.local
-        export PATH="$PYTHONUSERBASE/bin:$PATH"
 
+        echo "***** Installing dependencies *****"
         python -m pip install --upgrade pip wheel
         pip install -qr requirements.txt
-        echo "***** Running nosetests with: $(params.args) *****"
-        nosetests $(params.args) || true
+
+        echo "***** Running nosetests with: $(params.args)"
+        nosetests $(params.args)
